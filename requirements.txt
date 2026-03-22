@@ -1,0 +1,16 @@
+# Core PDF processing
+pdfplumber
+
+# Excel generation
+openpyxl
+
+# Streamlit UI
+streamlit
+
+# Google OAuth & Drive API
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
+# Data handling (used in streamlit_app.py for DataFrames/display)
+pandas
