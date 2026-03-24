@@ -721,7 +721,7 @@ redirect_uri  = "http://localhost:8502"
                                 f"<div class='file-row'>📄 {f['name']} <small>({kb} KB)</small></div>",
                                 unsafe_allow_html=True,
                             )
-f
+
                 if st.button(
                     f"▶  Download & Process {len(pdf_files)} PDFs from '{current_name}'",
                     type="primary",
