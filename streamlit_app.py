@@ -460,13 +460,19 @@ with tab_local:
 
         import streamlit.components.v1 as components
 
-        # Hidden text_input acts as message bus: JS writes JSON, Python reads it
-        raw_payload = st.text_input(
-            "folder_payload_bus",
-            value="",
-            key="folder_payload_bus",
-            label_visibility="collapsed",
+        # ── Payload retrieval ─────────────────────────────────────────────────
+        # JS writes base64 JSON into a hidden text_input (aria-label = key),
+        # then fires an Enter keydown to trigger Streamlit rerun.
+        ss_payload = st.text_input(
+            "ss_payload_reader",
+            value=st.session_state.get("folder_payload", ""),
+            key="ss_payload_reader",
+            label_visibility="hidden",
         )
+        if ss_payload and ss_payload != st.session_state.get("folder_payload", ""):
+            st.session_state["folder_payload"] = ss_payload
+
+        raw_payload = st.session_state.get("folder_payload", "")
 
         folder_component_html = """
 <style>
@@ -619,25 +625,17 @@ with tab_local:
         progressBar.style.width = Math.round(done / files.length * 100) + '%';
         if (done === files.length) {
           progressWrap.style.display = 'none';
-          setStatus('✅ ' + folderName + ' — ' + files.length + ' PDF(s) ready. Click ▶ Process below.', 'ok');
-          // Write JSON into the hidden Streamlit text_input
+          setStatus('✅ ' + folderName + ' — ' + files.length + ' PDF(s) ready. Loading…', 'ok');
           const payload = JSON.stringify(results);
-          // Find the hidden input rendered by Streamlit (label = 'folder_payload_bus')
-          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-          for (const inp of inputs) {
-            const label = inp.closest('[data-testid="stTextInput"]');
-            if (label && label.textContent.includes('folder_payload_bus')) {
+          // Write directly into the Streamlit text_input (aria-label = key name)
+          setTimeout(function() {
+            const inp = window.parent.document.querySelector('input[aria-label="ss_payload_reader"]');
+            if (inp) {
               inp.value = payload;
               inp.dispatchEvent(new Event('input', { bubbles: true }));
-              break;
+              inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13 }));
             }
-          }
-          // Fallback: post to any Streamlit input
-          const allInputs = window.parent.document.querySelectorAll('input[aria-label="folder_payload_bus"]');
-          if (allInputs.length) {
-            allInputs[0].value = payload;
-            allInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-          }
+          }, 200);
         }
       };
       reader.readAsDataURL(file);
@@ -661,7 +659,14 @@ with tab_local:
             inv_prev = [f for f in uploaded_files_data if not is_credit_note(f["name"])]
             cn_prev  = [f for f in uploaded_files_data if is_credit_note(f["name"])]
 
-            with st.expander(f"📂 {len(uploaded_files_data)} PDFs ready — click to preview"):
+            st.success(
+                f"✅ **{len(uploaded_files_data)} PDFs** ready to process — "
+                f"<span class='inv-tag'>{len(inv_prev)} invoices</span>, "
+                f"<span class='cn-tag'>{len(cn_prev)} credit notes</span>",
+                icon=None,
+            )
+
+            with st.expander(f"📂 Preview {len(uploaded_files_data)} PDFs"):
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown(f"**<span class='inv-tag'>📑 Invoices ({len(inv_prev)})</span>**",
@@ -676,7 +681,17 @@ with tab_local:
                         st.markdown(f"<div class='file-row'>📄 {f['name']}</div>",
                                     unsafe_allow_html=True)
 
-            if st.button("▶ Process", type="primary", use_container_width=True, key="run_local"):
+            col_proc, col_reset = st.columns([4, 1])
+            with col_proc:
+                run_clicked = st.button("▶ Process", type="primary",
+                                        use_container_width=True, key="run_local")
+            with col_reset:
+                if st.button("🔄 Reset", use_container_width=True, key="reset_folder"):
+                    st.session_state.pop("folder_payload", None)
+                    st.session_state["ss_payload_reader"] = ""
+                    st.rerun()
+
+            if run_clicked:
                 tmp_dir = tempfile.mkdtemp(prefix="uploaded_pdfs_")
                 try:
                     for f in uploaded_files_data:
@@ -689,7 +704,7 @@ with tab_local:
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
         else:
-            st.info("👆 Drop a folder or browse above, then click **▶ Process** to begin.")
+            st.info("👆 Drop a folder or click **Browse Folder** above, then click **▶ Process** to begin.")
 
     # ── LOCAL MODE: folder path + Browse dialog ────────────────────────────────
     else:
