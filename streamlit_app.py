@@ -454,125 +454,242 @@ def _pick_folder() -> str:
 
 with tab_local:
 
-    # ── CLOUD MODE: folder picker via webkitdirectory (browser-native) ─────────
+    # ── CLOUD MODE: custom folder drag-and-drop + browse ──────────────────────
     if not TKINTER_OK:
         st.markdown("#### Select your PDFs folder")
-        st.info(
-            "📂 Click **Browse Folder** below and select the **folder** "
-            "containing your PDFs — all PDFs inside will be picked up automatically."
+
+        import streamlit.components.v1 as components
+
+        # Hidden text_input acts as message bus: JS writes JSON, Python reads it
+        raw_payload = st.text_input(
+            "folder_payload_bus",
+            value="",
+            key="folder_payload_bus",
+            label_visibility="collapsed",
         )
 
-        # Custom HTML component: uses webkitdirectory so the browser shows a
-        # folder-picker dialog (works in Chrome, Edge, Firefox 112+).
-        # Files are base64-encoded and sent back to Streamlit via
-        # st.session_state via a hidden text_input acting as a message bus.
-        folder_picker_html = """
+        folder_component_html = """
 <style>
-  #folder-btn {
+  * { box-sizing: border-box; }
+  body { margin: 0; background: transparent; font-family: sans-serif; }
+
+  #drop-zone {
+    border: 2px dashed #4a7abf;
+    border-radius: 12px;
+    background: #0e1a2b;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    user-select: none;
+  }
+  #drop-zone.dragover {
+    border-color: #63b3ed;
+    background: #132238;
+  }
+  #drop-zone .icon { font-size: 2.4rem; margin-bottom: 8px; }
+  #drop-zone .title {
+    font-size: 1.05rem; font-weight: 700; color: #e2e8f0; margin-bottom: 4px;
+  }
+  #drop-zone .sub { font-size: 0.82rem; color: #94a3b8; margin-bottom: 16px; }
+
+  #browse-btn {
     background: #1F4E79; color: #fff; border: none; border-radius: 8px;
-    padding: 10px 24px; font-size: 1rem; cursor: pointer; font-weight: 600;
+    padding: 9px 26px; font-size: 0.95rem; font-weight: 600; cursor: pointer;
   }
-  #folder-btn:hover { background: #163a5c; }
-  #folder-label {
-    margin-top: 10px; font-size: 0.9rem; color: #ccc; min-height: 22px;
+  #browse-btn:hover { background: #163a5c; }
+
+  #status {
+    margin-top: 14px; font-size: 0.88rem; min-height: 20px; color: #94a3b8;
   }
+  #status.ok  { color: #4ade80; }
+  #status.err { color: #f87171; }
+  #progress-bar-wrap {
+    display: none; margin-top: 10px; background: #1e293b;
+    border-radius: 6px; overflow: hidden; height: 8px;
+  }
+  #progress-bar { height: 8px; background: #3b82f6; width: 0%; transition: width 0.1s; }
+
+  /* hidden file inputs */
+  #folder-input-browse { display: none; }
 </style>
-<input  id="folder-input" type="file" webkitdirectory mozdirectory multiple
-        accept=".pdf" style="display:none">
-<button id="folder-btn" onclick="document.getElementById('folder-input').click()">
-  📂 Browse Folder
-</button>
-<div id="folder-label">No folder selected.</div>
+
+<div id="drop-zone">
+  <div class="icon">📂</div>
+  <div class="title">Drag &amp; drop a folder here</div>
+  <div class="sub">or click the button below to browse for a folder</div>
+  <button id="browse-btn" onclick="document.getElementById('folder-input-browse').click()">
+    📁 Browse Folder
+  </button>
+  <input id="folder-input-browse" type="file" webkitdirectory mozdirectory multiple>
+</div>
+<div id="status">Waiting for folder…</div>
+<div id="progress-bar-wrap"><div id="progress-bar"></div></div>
 
 <script>
-document.getElementById('folder-input').addEventListener('change', function(e) {
-  const files = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-  if (!files.length) {
-    document.getElementById('folder-label').innerText = 'No PDFs found in selected folder.';
-    return;
-  }
-  // Show folder path (webkitRelativePath gives "FolderName/file.pdf")
-  const folderName = files[0].webkitRelativePath.split('/')[0];
-  document.getElementById('folder-label').innerText =
-    '✅ ' + folderName + ' — ' + files.length + ' PDF(s) selected. Reading files…';
+  const dropZone   = document.getElementById('drop-zone');
+  const statusEl   = document.getElementById('status');
+  const progressWrap = document.getElementById('progress-bar-wrap');
+  const progressBar  = document.getElementById('progress-bar');
 
-  // Read all files as base64 and post to Streamlit
-  let results = [];
-  let done = 0;
-  files.forEach(function(file) {
-    const reader = new FileReader();
-    reader.onload = function(ev) {
-      results.push({ name: file.name, data: ev.target.result.split(',')[1] });
-      done++;
-      if (done === files.length) {
-        // Send payload to Streamlit via postMessage
-        window.parent.postMessage({
-          type: 'streamlit:setComponentValue',
-          value: JSON.stringify(results)
-        }, '*');
-        document.getElementById('folder-label').innerText =
-          '✅ ' + folderName + ' — ' + files.length + ' PDF(s) ready. Click ▶ Process.';
-      }
-    };
-    reader.readAsDataURL(file);
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = cls || '';
+  }
+
+  // ── Drag-and-drop folder support ──────────────────────────────────────────
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.add('dragover');
   });
-});
+  dropZone.addEventListener('dragleave', e => {
+    dropZone.classList.remove('dragover');
+  });
+  dropZone.addEventListener('drop', async e => {
+    e.preventDefault(); e.stopPropagation();
+    dropZone.classList.remove('dragover');
+    const items = Array.from(e.dataTransfer.items);
+    const allFiles = [];
+    const readers  = items.map(item => {
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry && entry.isDirectory) {
+          return readDirectory(entry, allFiles);
+        } else {
+          const f = item.getAsFile();
+          if (f && f.name.toLowerCase().endsWith('.pdf')) allFiles.push(f);
+          return Promise.resolve();
+        }
+      }
+      return Promise.resolve();
+    });
+    await Promise.all(readers);
+    processFiles(allFiles);
+  });
+
+  function readDirectory(dirEntry, fileList) {
+    return new Promise(resolve => {
+      const reader = dirEntry.createReader();
+      function readBatch() {
+        reader.readEntries(async entries => {
+          if (!entries.length) { resolve(); return; }
+          const subReaders = entries.map(entry => {
+            if (entry.isFile) {
+              return new Promise(r => entry.file(f => {
+                if (f.name.toLowerCase().endsWith('.pdf')) fileList.push(f);
+                r();
+              }));
+            } else if (entry.isDirectory) {
+              return readDirectory(entry, fileList);
+            }
+            return Promise.resolve();
+          });
+          await Promise.all(subReaders);
+          readBatch(); // read next batch (>100 files)
+        });
+      }
+      readBatch();
+    });
+  }
+
+  // ── Browse-button folder picker ───────────────────────────────────────────
+  document.getElementById('folder-input-browse').addEventListener('change', function(e) {
+    const files = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    processFiles(files);
+  });
+
+  // ── Read & encode files, then send to Streamlit ───────────────────────────
+  function processFiles(files) {
+    if (!files.length) {
+      setStatus('⚠️ No PDFs found in the selected folder.', 'err');
+      return;
+    }
+    const folderName = (files[0].webkitRelativePath || files[0].name).split('/')[0];
+    setStatus('Reading ' + files.length + ' PDF(s)…');
+    progressWrap.style.display = 'block';
+    progressBar.style.width = '0%';
+
+    const results = [];
+    let done = 0;
+    files.forEach(function(file) {
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        results.push({ name: file.name, data: ev.target.result.split(',')[1] });
+        done++;
+        progressBar.style.width = Math.round(done / files.length * 100) + '%';
+        if (done === files.length) {
+          progressWrap.style.display = 'none';
+          setStatus('✅ ' + folderName + ' — ' + files.length + ' PDF(s) ready. Click ▶ Process below.', 'ok');
+          // Write JSON into the hidden Streamlit text_input
+          const payload = JSON.stringify(results);
+          // Find the hidden input rendered by Streamlit (label = 'folder_payload_bus')
+          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+          for (const inp of inputs) {
+            const label = inp.closest('[data-testid="stTextInput"]');
+            if (label && label.textContent.includes('folder_payload_bus')) {
+              inp.value = payload;
+              inp.dispatchEvent(new Event('input', { bubbles: true }));
+              break;
+            }
+          }
+          // Fallback: post to any Streamlit input
+          const allInputs = window.parent.document.querySelectorAll('input[aria-label="folder_payload_bus"]');
+          if (allInputs.length) {
+            allInputs[0].value = payload;
+            allInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 </script>
 """
 
-        import streamlit.components.v1 as components
-        folder_payload = components.html(folder_picker_html, height=100, scrolling=False)
+        components.html(folder_component_html, height=260, scrolling=False)
 
-        # Since components.html can't easily return values in all Streamlit versions,
-        # we use a reliable fallback: st.file_uploader with directory hint via label.
-        # The webkitdirectory button above is purely cosmetic on cloud —
-        # the actual upload is handled below with multi-file uploader.
-        st.markdown(
-            "<small style='color:#888'>💡 <b>Tip:</b> After clicking Browse Folder above, "
-            "if your browser doesn't support folder selection, use the uploader below — "
-            "select all files inside the folder with <kbd>Ctrl+A</kbd> / <kbd>Cmd+A</kbd>.</small>",
-            unsafe_allow_html=True,
-        )
+        # ── Decode payload sent from JS and process ───────────────────────────
+        uploaded_files_data = []
+        if raw_payload:
+            try:
+                uploaded_files_data = json.loads(raw_payload)
+            except Exception:
+                st.warning("⚠️ Could not read folder data. Please try again.")
 
-        uploaded_files = st.file_uploader(
-            "Or drag & drop / select all PDFs from the folder",
-            type=["pdf"],
-            accept_multiple_files=True,
-        )
+        if uploaded_files_data:
+            import base64
+            inv_prev = [f for f in uploaded_files_data if not is_credit_note(f["name"])]
+            cn_prev  = [f for f in uploaded_files_data if is_credit_note(f["name"])]
 
-        if uploaded_files:
-            inv_prev = [f for f in uploaded_files if not is_credit_note(f.name)]
-            cn_prev  = [f for f in uploaded_files if is_credit_note(f.name)]
-
-            with st.expander(f"📂 {len(uploaded_files)} PDFs selected — click to preview"):
+            with st.expander(f"📂 {len(uploaded_files_data)} PDFs ready — click to preview"):
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown(f"**<span class='inv-tag'>📑 Invoices ({len(inv_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in inv_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {f['name']}</div>",
                                     unsafe_allow_html=True)
                 with c2:
                     st.markdown(f"**<span class='cn-tag'>🔖 Credit Notes ({len(cn_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in cn_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {f['name']}</div>",
                                     unsafe_allow_html=True)
 
             if st.button("▶ Process", type="primary", use_container_width=True, key="run_local"):
                 tmp_dir = tempfile.mkdtemp(prefix="uploaded_pdfs_")
                 try:
-                    for uf in uploaded_files:
-                        dest = os.path.join(tmp_dir, uf.name)
+                    for f in uploaded_files_data:
+                        dest = os.path.join(tmp_dir, f["name"])
                         with open(dest, "wb") as out:
-                            out.write(uf.read())
+                            out.write(base64.b64decode(f["data"]))
                     result = run_processing(tmp_dir)
                     if result:
                         show_results(*result)
                 finally:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
         else:
-            st.info("👆 Select your folder above and click **▶ Process** to begin.")
+            st.info("👆 Drop a folder or browse above, then click **▶ Process** to begin.")
 
     # ── LOCAL MODE: folder path + Browse dialog ────────────────────────────────
     else:
