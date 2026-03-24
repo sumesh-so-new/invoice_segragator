@@ -236,21 +236,28 @@ def process_folder(folder_path, output_file="output.json"):
     inv_sr = 1
     cn_sr = 1
 
-    for file in sorted(os.listdir(folder_path)):
-        if not file.lower().endswith(".pdf"):
-            continue
+    # Collect all PDFs recursively from folder and all subfolders
+    all_pdfs = []
+    for root, dirs, files in os.walk(folder_path):
+        dirs.sort()   # process subfolders in alphabetical order
+        for file in sorted(files):
+            if file.lower().endswith(".pdf"):
+                all_pdfs.append(os.path.join(root, file))
 
-        pdf_path = os.path.join(folder_path, file)
+    for pdf_path in all_pdfs:
+        file        = os.path.basename(pdf_path)
+        # Show relative path so you can see which subfolder each file came from
+        rel_path    = os.path.relpath(pdf_path, folder_path)
 
         if is_credit_note(pdf_path):
-            print(f"Processing [CREDIT NOTE]: {file}")
+            print(f"Processing [CREDIT NOTE]: {rel_path}")
             extracted = extract_credit_note_data(pdf_path)
             for item in extracted:
                 item = {"Sr.No": cn_sr, **item}
                 credit_notes.append(item)
                 cn_sr += 1
         else:
-            print(f"Processing [INVOICE]     : {file}")
+            print(f"Processing [INVOICE]     : {rel_path}")
             extracted = extract_invoice_data(pdf_path)
             for item in extracted:
                 item = {"Sr.No": inv_sr, **item}
@@ -321,15 +328,93 @@ def create_final_json(invoices, credit_notes, output_file="final.json"):
 
 # ── Brand keywords (ordered: longer/specific first to avoid partial matches) ──
 _BRAND_KEYWORDS = [
-    "Garden Vareli", "Arrow", "Puma", "PUMA", "XYXX",
-    "Soch", "Raymond", "ALYNE",
+    # ── Multi-word brands first (must come before their single-word roots) ────
+    "Garden Vareli",
+    "Van Heusen",
+    "Allen Solly",
+    "Tommy Hilfiger",
+    "Tommy Helfiger",
+    "Peter England",
+    "Arrow Sports",
+    "Calvin Klein",
+    "Louis Philippe",
+    "U.S. Polo Assn",
+    "United Colors of Benetton",
+    "Jack & Jones",
+    "Being Human",
+    "Park Avenue",
+    "Monte Carlo",
+    "Mast & Harbour",
+    "Here & Now",
+    "Red Tape",
+    "Flying Machine",
+    "Indian Terrain",
+    "ColorPlus",
+    # ── Single-word brands ────────────────────────────────────────────────────
+    "Arrow",
+    "Raymond",
+    "GAP",
+    "Vastramay",
+    "Puma",
+    "PUMA",
+    "XYXX",
+    "Soch",
+    "ALYNE",
+    "Levis",
+    "Levi's",
+    "Wrangler",
+    "Pepe",
+    "Spykar",
+    "Killer",
+    "Blackberrys",
+    "Zodiac",
+    "Turtle",
+    "Basics",
+    "Breakbounce",
+    "Adidas",
+    "Reebok",
+    "Nike",
+    "HRX",
+    "Jockey",
+    "Rupa",
+    "Dollar",
+    "Biba",
+    "Libas",
+    "Rangmanch",
+    "Anubhutee",
+    "Aurelia",
+    "Nayo",
+    "Anouk",
+    "Vishudh",
+    "Tisser",
 ]
+
+# Canonical name map — normalises casing / spelling variations
+_BRAND_CANONICAL = {
+    "tommy hilfiger":     "Tommy Hilfiger",
+    "tommy helfiger":     "Tommy Hilfiger",
+    "arrow sports":       "Arrow Sports",
+    "arrow":              "Arrow",
+    "levi's":             "Levis",
+    "levis":              "Levis",
+    "u.s. polo assn":     "US Polo Assn",
+    "colorplus":          "ColorPlus",
+    "jack & jones":       "Jack & Jones",
+    "being human":        "Being Human",
+    "flying machine":     "Flying Machine",
+    "indian terrain":     "Indian Terrain",
+    "monte carlo":        "Monte Carlo",
+    "mast & harbour":     "Mast & Harbour",
+    "here & now":         "Here & Now",
+    "park avenue":        "Park Avenue",
+    "red tape":           "Red Tape",
+}
 
 def _detect_brand(narration):
     n = (narration or "").lower()
     for brand in _BRAND_KEYWORDS:
         if brand.lower() in n:
-            return "Puma" if brand.upper() == "PUMA" else brand
+            return _BRAND_CANONICAL.get(brand.lower(), brand)
     return "Other"
 
 
