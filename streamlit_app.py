@@ -408,97 +408,166 @@ tab_local, tab_drive = st.tabs(["📁  Local Folder", "☁️  Google Drive"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — LOCAL FOLDER  (folder path + native Browse dialog)
+# TAB 1 — LOCAL FOLDER
+# Auto-detects environment:
+#   • Local machine  → folder path text box + native Browse dialog (tkinter)
+#   • Streamlit Cloud → file uploader (tkinter/GUI not available on server)
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _tkinter_available() -> bool:
+    """Return True only if tkinter can open a real display (i.e. running locally)."""
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        root.destroy()
+        return True
+    except Exception:
+        return False
+
+# Detect once per session and cache the result
+if "tkinter_ok" not in st.session_state:
+    st.session_state["tkinter_ok"] = _tkinter_available()
+
+TKINTER_OK = st.session_state["tkinter_ok"]
+
+
+def _pick_folder() -> str:
+    """Open a native OS folder-picker dialog and return the chosen path."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes("-topmost", True)
+        root.after(100, root.focus_force)
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="Select folder containing PDFs"
+        )
+        root.destroy()
+        return selected or ""
+    except Exception as e:
+        st.error(f"❌ Could not open folder picker: {e}")
+        return ""
+
+
 with tab_local:
-    st.markdown("#### Enter the path to your PDFs folder")
 
-    # ── Folder picker via tkinter (runs on user's local machine) ─────────────
-    def _pick_folder() -> str:
-        """Open a native OS folder-picker dialog and return the chosen path."""
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.wm_attributes("-topmost", True)
-            root.after(100, root.focus_force)
-            selected = filedialog.askdirectory(
-                parent=root,
-                title="Select folder containing PDFs"
-            )
-            root.destroy()
-            return selected or ""
-        except Exception as e:
-            st.error(f"❌ Could not open folder picker: {e}")
-            return ""
+    # ── CLOUD MODE: file uploader ──────────────────────────────────────────────
+    if not TKINTER_OK:
+        st.markdown("#### Upload your PDF invoices & credit notes")
+        st.info("📤 Select one or more PDF files from your computer to process.")
 
-    # Pre-initialise the widget's session_state key so Browse can
-    # write directly into it and st.rerun() will show the updated value.
-    if "local_folder" not in st.session_state:
-        st.session_state["local_folder"] = ""
-
-    col_path, col_browse, col_btn = st.columns([3, 1, 1])
-
-    with col_browse:
-        browse_clicked = st.button("📂 Browse", use_container_width=True, key="browse_folder")
-
-    with col_btn:
-        run_local = st.button("▶ Process", type="primary",
-                              use_container_width=True, key="run_local")
-
-    # Handle Browse BEFORE rendering the text_input so the picked path
-    # is already in session_state when the widget is drawn.
-    if browse_clicked:
-        picked = _pick_folder()
-        if picked:
-            st.session_state["local_folder"] = picked
-        else:
-            st.warning("⚠️ No folder selected. You can also type the path manually.")
-
-    with col_path:
-        folder_path = st.text_input(
-            "Folder path",
-            placeholder=r"e.g. C:\Users\YourName\invoices   or   /home/user/invoices",
+        uploaded_files = st.file_uploader(
+            "Choose PDF files",
+            type=["pdf"],
+            accept_multiple_files=True,
             label_visibility="collapsed",
-            key="local_folder",
         )
 
-    if folder_path and os.path.isdir(folder_path):
-        pdf_files = sorted(
-            [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
-        )
-        if pdf_files:
-            inv_prev = [f for f in pdf_files if not is_credit_note(f)]
-            cn_prev  = [f for f in pdf_files if is_credit_note(f)]
-            with st.expander(f"📂 Found {len(pdf_files)} PDFs — click to preview"):
+        if uploaded_files:
+            inv_prev = [f for f in uploaded_files if not is_credit_note(f.name)]
+            cn_prev  = [f for f in uploaded_files if is_credit_note(f.name)]
+
+            with st.expander(f"📂 {len(uploaded_files)} PDFs selected — click to preview"):
                 c1, c2 = st.columns(2)
                 with c1:
                     st.markdown(f"**<span class='inv-tag'>📑 Invoices ({len(inv_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in inv_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
                                     unsafe_allow_html=True)
                 with c2:
                     st.markdown(f"**<span class='cn-tag'>🔖 Credit Notes ({len(cn_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in cn_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
                                     unsafe_allow_html=True)
-        else:
-            st.warning("⚠️ No PDF files found in this folder.")
-    elif folder_path:
-        st.error("❌ Folder path does not exist.")
 
-    if run_local:
-        if not folder_path or not os.path.isdir(folder_path):
-            st.error("Please enter a valid folder path.")
+            if st.button("▶ Process", type="primary", use_container_width=True, key="run_local"):
+                tmp_dir = tempfile.mkdtemp(prefix="uploaded_pdfs_")
+                try:
+                    for uf in uploaded_files:
+                        dest = os.path.join(tmp_dir, uf.name)
+                        with open(dest, "wb") as out:
+                            out.write(uf.read())
+                    result = run_processing(tmp_dir)
+                    if result:
+                        show_results(*result)
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
         else:
-            result = run_processing(folder_path)
-            if result:
-                show_results(*result)
-    elif not folder_path:
-        st.info("👆 Enter a folder path above (or click **📂 Browse**) and click **▶ Process** to begin.")
+            st.info("👆 Upload PDF files above and click **▶ Process** to begin.")
+
+    # ── LOCAL MODE: folder path + Browse dialog ────────────────────────────────
+    else:
+        st.markdown("#### Enter the path to your PDFs folder")
+
+        if "local_folder" not in st.session_state:
+            st.session_state["local_folder"] = ""
+
+        col_path, col_browse, col_btn = st.columns([3, 1, 1])
+
+        with col_browse:
+            browse_clicked = st.button("📂 Browse", use_container_width=True, key="browse_folder")
+
+        with col_btn:
+            run_local = st.button("▶ Process", type="primary",
+                                  use_container_width=True, key="run_local")
+
+        # Handle Browse BEFORE rendering the text_input so the picked path
+        # is already in session_state when the widget is drawn.
+        if browse_clicked:
+            picked = _pick_folder()
+            if picked:
+                st.session_state["local_folder"] = picked
+            else:
+                st.warning("⚠️ No folder selected. You can also type the path manually.")
+
+        with col_path:
+            folder_path = st.text_input(
+                "Folder path",
+                placeholder=r"e.g. C:\Users\YourName\invoices   or   /home/user/invoices",
+                label_visibility="collapsed",
+                key="local_folder",
+            )
+
+        if folder_path and os.path.isdir(folder_path):
+            pdf_files = sorted(
+                [f for f in os.listdir(folder_path) if f.lower().endswith(".pdf")]
+            )
+            if pdf_files:
+                inv_prev = [f for f in pdf_files if not is_credit_note(f)]
+                cn_prev  = [f for f in pdf_files if is_credit_note(f)]
+                with st.expander(f"📂 Found {len(pdf_files)} PDFs — click to preview"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown(f"**<span class='inv-tag'>📑 Invoices ({len(inv_prev)})</span>**",
+                                    unsafe_allow_html=True)
+                        for f in inv_prev:
+                            st.markdown(f"<div class='file-row'>📄 {f}</div>",
+                                        unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(f"**<span class='cn-tag'>🔖 Credit Notes ({len(cn_prev)})</span>**",
+                                    unsafe_allow_html=True)
+                        for f in cn_prev:
+                            st.markdown(f"<div class='file-row'>📄 {f}</div>",
+                                        unsafe_allow_html=True)
+            else:
+                st.warning("⚠️ No PDF files found in this folder.")
+        elif folder_path:
+            st.error("❌ Folder path does not exist.")
+
+        if run_local:
+            if not folder_path or not os.path.isdir(folder_path):
+                st.error("Please enter a valid folder path.")
+            else:
+                result = run_processing(folder_path)
+                if result:
+                    show_results(*result)
+        elif not folder_path:
+            st.info("👆 Enter a folder path above (or click **📂 Browse**) and click **▶ Process** to begin.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
