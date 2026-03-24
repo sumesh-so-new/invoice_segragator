@@ -406,8 +406,9 @@ if GOOGLE_LIBS_OK:
 tab_local, tab_drive = st.tabs(["📁  Local Folder", "☁️  Google Drive"])
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — LOCAL FOLDER
+# TAB 1 — LOCAL FOLDER  (folder path + native Browse dialog)
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_local:
     st.markdown("#### Enter the path to your PDFs folder")
@@ -420,7 +421,6 @@ with tab_local:
             from tkinter import filedialog
             root = tk.Tk()
             root.withdraw()
-            # Windows: force dialog to foreground
             root.wm_attributes("-topmost", True)
             root.after(100, root.focus_force)
             selected = filedialog.askdirectory(
@@ -433,7 +433,7 @@ with tab_local:
             st.error(f"❌ Could not open folder picker: {e}")
             return ""
 
-    # KEY FIX: pre-initialise the widget's session_state key so Browse can
+    # Pre-initialise the widget's session_state key so Browse can
     # write directly into it and st.rerun() will show the updated value.
     if "local_folder" not in st.session_state:
         st.session_state["local_folder"] = ""
@@ -452,7 +452,6 @@ with tab_local:
     if browse_clicked:
         picked = _pick_folder()
         if picked:
-            # Write directly into the widget's own key → shows up immediately
             st.session_state["local_folder"] = picked
         else:
             st.warning("⚠️ No folder selected. You can also type the path manually.")
@@ -460,9 +459,9 @@ with tab_local:
     with col_path:
         folder_path = st.text_input(
             "Folder path",
-            placeholder=r"e.g. D:\Sumesh\invoice_data_extractor\PUMA\New folder",
+            placeholder=r"e.g. C:\Users\YourName\invoices   or   /home/user/invoices",
             label_visibility="collapsed",
-            key="local_folder",   # reads & writes st.session_state["local_folder"]
+            key="local_folder",
         )
 
     if folder_path and os.path.isdir(folder_path):
@@ -499,7 +498,7 @@ with tab_local:
             if result:
                 show_results(*result)
     elif not folder_path:
-        st.info("👆 Enter a folder path above and click **▶ Process** to begin.")
+        st.info("👆 Enter a folder path above (or click **📂 Browse**) and click **▶ Process** to begin.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
