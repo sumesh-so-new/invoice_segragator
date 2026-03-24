@@ -497,14 +497,18 @@ with tab_local:
         )
 
         # Filter to PDFs only (folder may contain other file types)
+        # basename() handles "SubFolder/file.pdf" paths from webkitdirectory
         if uploaded_files:
             pdf_files = [f for f in uploaded_files if f.name.lower().endswith(".pdf")]
         else:
             pdf_files = []
 
+        def _basename(f):
+            return os.path.basename(f.name.replace("\\", "/"))
+
         if pdf_files:
-            inv_prev = [f for f in pdf_files if not is_credit_note(f.name)]
-            cn_prev  = [f for f in pdf_files if is_credit_note(f.name)]
+            inv_prev = [f for f in pdf_files if not is_credit_note(_basename(f))]
+            cn_prev  = [f for f in pdf_files if is_credit_note(_basename(f))]
 
             st.markdown(
                 f"✅ **{len(pdf_files)} PDFs** ready — "
@@ -519,20 +523,30 @@ with tab_local:
                     st.markdown(f"**<span class='inv-tag'>📑 Invoices ({len(inv_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in inv_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {_basename(f)}</div>",
                                     unsafe_allow_html=True)
                 with c2:
                     st.markdown(f"**<span class='cn-tag'>🔖 Credit Notes ({len(cn_prev)})</span>**",
                                 unsafe_allow_html=True)
                     for f in cn_prev:
-                        st.markdown(f"<div class='file-row'>📄 {f.name}</div>",
+                        st.markdown(f"<div class='file-row'>📄 {_basename(f)}</div>",
                                     unsafe_allow_html=True)
 
             if st.button("▶ Process", type="primary", use_container_width=True, key="run_local"):
                 tmp_dir = tempfile.mkdtemp(prefix="uploaded_pdfs_")
                 try:
+                    seen = {}
                     for uf in pdf_files:
-                        dest = os.path.join(tmp_dir, uf.name)
+                        # uf.name may be "SubFolder/filename.pdf" when uploaded via
+                        # webkitdirectory — strip to basename only, deduplicate if needed.
+                        basename = os.path.basename(uf.name.replace("\\", "/"))
+                        if basename in seen:
+                            seen[basename] += 1
+                            name, ext = os.path.splitext(basename)
+                            basename = f"{name}_{seen[basename]}{ext}"
+                        else:
+                            seen[basename] = 0
+                        dest = os.path.join(tmp_dir, basename)
                         with open(dest, "wb") as out:
                             out.write(uf.read())
                     result = run_processing(tmp_dir)
